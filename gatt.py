@@ -71,7 +71,7 @@ def result_from_fields(fields: list[str]) -> dict | None:
 
 async def weigh_session(address: str, token: bytes, make_users, pick_uid, start_uid: int,
                         timeout: float = 45.0, find_timeout: float = 10.0,
-                        idle_timeout: float = 25.0) -> dict | None:
+                        idle_timeout: float = 12.0) -> dict | None:
     """Verbindet, meldet sich an, schickt die Profile und wartet auf das Endergebnis.
 
     Die Waage wertet nur aus, wenn der gemeldete aktuelle Benutzer zum Gewicht passt. Darum
