@@ -1,0 +1,16 @@
+s400-bridge
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project includes code from:
+
+- snelstim/ha-xiaomi-s400 (https://github.com/snelstim/ha-xiaomi-s400), Apache-2.0,
+  directory s400/ (see s400/QUELLE.txt for the commit). That code is itself adapted from
+  nokistin/xiaomi-s400-live (Apache-2.0) and dnandha/miauth (Apache-2.0).
+
+It uses at runtime:
+
+- xiaomi-ble (https://github.com/Bluetooth-Devices/xiaomi-ble), Apache-2.0
+- bleak (https://github.com/hbldh/bleak), MIT
+- cryptography (https://github.com/pyca/cryptography), Apache-2.0 / BSD
+
+Xiaomi, Mijia and Mi Home are trademarks of Xiaomi Inc. This project is not affiliated with Xiaomi.

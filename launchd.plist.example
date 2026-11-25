@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Copy to ~/Library/LaunchAgents/local.s400-bridge.plist and replace /PATH/TO/s400-bridge -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.s400-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/PATH/TO/s400-bridge/blescan/blescan</string>
+    <string>/PATH/TO/s400-bridge/.venv/bin/python</string>
+    <string>-u</string>
+    <string>/PATH/TO/s400-bridge/bridge.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>/PATH/TO/s400-bridge</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/PATH/TO/s400-bridge/bridge.log</string>
+  <key>StandardErrorPath</key><string>/PATH/TO/s400-bridge/bridge.log</string>
+</dict>
+</plist>

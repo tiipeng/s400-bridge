@@ -1,0 +1,18 @@
+{
+  "ha_url": "http://localhost:8123",
+  "scale_mac": "AA:BB:CC:DD:EE:FF",
+  "scale_ble_id": "",
+  "scale_mid": "1234567890",
+  "shortcut_name": "Waage Health",
+  "icloud_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/Waage",
+  "persons": [
+    {
+      "id": "alex", "name": "Alex", "sex": "m", "height_cm": 180, "birth_year": 1990, "ref_kg": 80,
+      "notify": "", "scale_uid": 3, "scale_ut": 1, "scale_time": 1700000000
+    },
+    {
+      "id": "sam", "name": "Sam", "sex": "f", "height_cm": 165, "birth_year": 1994, "ref_kg": 60,
+      "notify": "", "scale_uid": 4, "scale_ut": 2, "scale_time": 1700000000
+    }
+  ]
+}

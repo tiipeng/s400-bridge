@@ -1,0 +1,2 @@
+Übernommen aus https://github.com/snelstim/ha-xiaomi-s400 (Apache-2.0), Ordner custom_components/xiaomi_s400/s400, Commit:
+520c1955dcb52b6a3eb5890545fe312a2633b1df
