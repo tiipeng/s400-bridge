@@ -35,12 +35,21 @@ log = logging.getLogger("waage")
 
 # ---------------------------------------------------------------- Konfiguration
 
-def keychain(account: str) -> str | None:
-    r = subprocess.run(
-        ["/usr/bin/security", "find-generic-password", "-s", "waage-bridge", "-a", account, "-w"],
-        capture_output=True, text=True,
-    )
-    return r.stdout.strip() or None
+def keychain(account: str, tries: int = 5) -> str | None:
+    """Liest ein Geheimnis aus dem Schlüsselbund. Direkt nach dem Login ist er manchmal noch
+    nicht bereit (einmal beobachtet) -> ein paar Versuche."""
+    for i in range(tries):
+        r = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", "waage-bridge", "-a", account, "-w"],
+            capture_output=True, text=True,
+        )
+        if r.stdout.strip():
+            return r.stdout.strip()
+        if "could not be found" in r.stderr:
+            return None
+        log.warning("Schlüsselbund (%s) nicht lesbar: %s – neuer Versuch", account, r.stderr.strip())
+        time.sleep(3)
+    return None
 
 
 def load_config() -> dict:
@@ -328,12 +337,19 @@ def to_service_info(line: str, scale_mac: str | None = None) -> BluetoothService
 
 
 class GattWorker:
-    """Verbindet sich bei jedem Aufwachen der Waage (erstes Funkpaket nach einer Pause) mit ihr.
+    """Zweimal-Wiegen: Nach der ersten Messung ist die Waage kurz wach und funkt. Genau dann
+    verbinden wir uns (Mi-Home-v2-Login) und warten bis zu WAIT s auf ein zweites Draufsteigen.
+    Dann sind wir schon verbunden, melden die passende Person, die Waage rechnet selbst und
+    zeigt Körperfett auf dem Display.
 
-    Solange eine Sitzung läuft oder kurz nach einem Ergebnis werden Messungen aus den Funkpaketen
-    zurückgehalten; liefert die Sitzung nichts, werden sie normal verarbeitet (alter Weg)."""
+    Die erste Messung (Funkpakete, eigene Formel) wird zurückgehalten: kommt ein Ergebnis der
+    Waage für dieselbe Person, ersetzt es sie; sonst wird sie nach der Sitzung normal gespeichert.
+    Hintergrund: Aus dem Schlaf funkt die S400 erst nach der Messung – zum ersten Wiegen kann man
+    nicht rechtzeitig verbunden sein, und dauerhaft verbunden bleiben kostet Batterie."""
 
-    COOLDOWN = 45  # s nach einer Sitzung: die Waage ist noch wach, nicht gleich wieder verbinden
+    WAIT = 90       # s nach dem Verbinden auf das zweite Draufsteigen warten
+    COOLDOWN = 5    # s nach einer Sitzung
+    SAME_KG = 2.0   # gleiche Person, wenn Gewichte so nah beieinander liegen
 
     def __init__(self, cfg: dict, store: Store, ha: HA, token: bytes):
         import asyncio
@@ -343,27 +359,21 @@ class GattWorker:
         self.lock = threading.Lock()
         self.busy = False
         self.ended = -1e9
-        self.result_at = -1e9
+        self.result = (-1e9, 0.0)  # (Zeitpunkt, kg) des letzten Waagen-Ergebnisses
         self.pending: list[tuple] = []
 
-    WAKE_SILENCE = 30  # s Funkstille davor = die Waage wacht gerade auf
-
     def start_scanner(self) -> None:
-        """Eigener Dauer-Scan in diesem Prozess: beim ersten Signal nach einer Pause sofort mit
-        genau diesem Gerät verbinden (ohne neue Suche) – die Waage misst schon, es zählt jede Sekunde."""
+        """Dauer-Scan im eigenen Prozess (kostet die Waage nichts). Sieht er das Messpaket der Waage,
+        wird sofort mit genau diesem Gerät verbunden – die Waage funkt danach nur ~2 s."""
         import asyncio
         from bleak import BleakScanner
         scale_id = self.cfg.get("scale_ble_id")
-        state = {"last": -1e9}
 
         def cb(device, adv):
             if not (device.address == scale_id or (adv.local_name or device.name or "").startswith("Mijia Scale")):
                 return
-            now = time.monotonic()
-            woke = now - state["last"] >= self.WAKE_SILENCE
-            state["last"] = now
-            if woke:
-                log.info("Waage wacht auf (rssi %s)", adv.rssi)
+            d = adv.service_data.get(FE95)
+            if d and d[0] & 0x40:  # Paket mit Messwerten = Messung gerade fertig
                 self.poke(device.address, device)
 
         async def run():
@@ -384,14 +394,17 @@ class GattWorker:
             if self.busy or time.monotonic() - self.ended < self.COOLDOWN:
                 return
             self.busy = True
+        log.info("Messung erkannt – verbinde für zweites Wiegen")
         asyncio.run_coroutine_threadsafe(self._session(ble_id, device), self.loop)
 
     def adv_measurement(self, w, i, h) -> None:
         with self.lock:
             if self.busy:
                 self.pending.append((w, i, h))
+                log.info("Funk-Messung %.1f kg zurückgehalten (warte auf zweites Wiegen)", w)
                 return
-            if time.monotonic() - self.result_at < 120:
+            t, kg = self.result
+            if time.monotonic() - t < 120 and abs(w - kg) < self.SAME_KG:
                 log.info("Funk-Messung %.1f kg ignoriert (Waage hat schon geliefert)", w)
                 return
         handle(self.cfg, self.store, self.ha, w, i, h)
@@ -400,17 +413,26 @@ class GattWorker:
         import gatt
         cfg, store = self.cfg, self.store
         res = None
+        # Sofort verbinden (Zeitfenster ~2 s). Die richtige Person wird beim zweiten Wiegen gesetzt,
+        # sobald das Gewicht stabil ist; bis dahin die zuletzt gewogene.
+        start = max(cfg["persons"], key=lambda p: (store.last(p["id"]) or ("",))[0])
         try:
-            last = max(cfg["persons"], key=lambda p: (store.last(p["id"]) or ("",))[0])
             res = await gatt.weigh_session(
                 ble_id, self.token,
                 make_users=lambda uid: gatt.users_json(cfg, uid, {p["id"]: store.last_weight(p["id"]) for p in cfg["persons"]}),
                 pick_uid=lambda kg: pick_person(cfg, store, kg)["scale_uid"],
-                start_uid=last["scale_uid"], timeout=60, find_timeout=10,
-                idle_timeout=4, device=device)
+                start_uid=start["scale_uid"], timeout=self.WAIT + 30, find_timeout=4,
+                idle_timeout=self.WAIT, device=device)
         except Exception as e:
             log.warning("Verbindung zur Waage fehlgeschlagen: %r", e)
         ok = bool(res and res.get("weight"))
+        with self.lock:
+            pending, self.pending = self.pending, []
+            if ok:  # Funk-Messungen derselben Person werden durch das Waagen-Ergebnis ersetzt
+                pending = [x for x in pending if abs(x[0] - res["weight"]) >= self.SAME_KG]
+                self.result = (time.monotonic(), res["weight"])
+        for w, i, h in pending:
+            handle(cfg, store, self.ha, w, i, h)
         if ok:
             try:
                 handle(cfg, store, self.ha, res["weight"], res.get("impedance_low"), res.get("hr"), scale=res)
@@ -419,11 +441,6 @@ class GattWorker:
         with self.lock:
             self.busy = False
             self.ended = time.monotonic()
-            if ok:
-                self.result_at = time.monotonic()
-            pending, self.pending = ([] if ok else self.pending), []
-        for w, i, h in pending:
-            handle(cfg, store, self.ha, w, i, h)
 
 
 def main() -> None:
@@ -437,7 +454,7 @@ def main() -> None:
     ha = HA(cfg["ha_url"], keychain("ha_token"))
     token = keychain("token")
     worker = GattWorker(cfg, store, ha, bytes.fromhex(token)) if token else None
-    if worker and cfg.get("gatt_fast", False):  # aus: Waage funkt erst nach der Messung, kein Zeitfenster
+    if worker and cfg.get("gatt_second_weighing", False):  # Zweimal-Wiegen fürs Display-Fett
         worker.start_scanner()
     else:
         log.warning("kein Waagen-Token im Schlüsselbund – nur Funk-Modus, Display zeigt kein Fett")

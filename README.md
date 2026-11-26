@@ -14,15 +14,17 @@ estimates body fat / lean mass / BMI with the well-known Mi Fit formula, and
 An iOS Shortcut on each person's iPhone picks up the JSON files and logs weight, body fat %,
 lean body mass and BMI into Apple Health (with the original timestamp).
 
-### Experimental: the scale's own evaluation (off by default)
+### Optional: body fat on the scale display ("weigh twice")
 
-`gatt.py` can also talk to the scale like the Xiaomi app does: Mi Home v2 login with the device token,
+`gatt.py` can talk to the scale like the Xiaomi app does: Mi Home v2 login with the device token,
 send the user profiles, tell the scale who is standing on it. The scale then computes body composition
 itself, **shows body fat on its display** and returns the full result (fat, muscle, water, BMR, …).
-We verified this works, **but only if the Mac is already connected when someone steps on**: from sleep,
-the S400 only starts advertising when the measurement is already finished, so there is no time to connect.
-Staying connected permanently would drain the scale's batteries, so it is disabled
-(`gatt_fast` / `gatt_on_beacon` in `config.json`, both `false`). `tools/gatt_test.py` runs one session by hand.
+
+Catch: from sleep, the S400 only starts advertising when the measurement is already finished, so you can't be
+connected for the first weigh-in, and staying connected permanently would drain the batteries. With
+`"gatt_second_weighing": true` the bridge connects right after a weigh-in (the scale is awake for ~2 s) and waits
+up to 90 s: **step off and on again**, and the second weigh-in shows body fat on the display. The scale's result
+then replaces the first (formula-based) measurement. If nobody steps on again, the first measurement is kept.
 
 > Code comments and log messages are in German. Tested with one S400 (firmware `2.1.1_0057`) on macOS 26.
 > The profile message was rebuilt from a Bluetooth capture of the Xiaomi app. It works for us, but it is

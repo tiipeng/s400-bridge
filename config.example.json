@@ -32,5 +32,5 @@
     }
   ],
   "gatt_on_beacon": false,
-  "gatt_fast": false
+  "gatt_second_weighing": false
 }
