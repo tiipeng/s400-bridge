@@ -71,20 +71,23 @@ def result_from_fields(fields: list[str]) -> dict | None:
 
 async def weigh_session(address: str, token: bytes, make_users, pick_uid, start_uid: int,
                         timeout: float = 45.0, find_timeout: float = 10.0,
-                        idle_timeout: float = 12.0) -> dict | None:
+                        idle_timeout: float = 12.0, device=None) -> dict | None:
     """Verbindet, meldet sich an, schickt die Profile und wartet auf das Endergebnis.
 
     Die Waage wertet nur aus, wenn der gemeldete aktuelle Benutzer zum Gewicht passt. Darum
-    zuerst start_uid melden und, sobald das Gewicht stabil ist, den per pick_uid(kg) erkannten."""
-    dev = await BleakScanner.find_device_by_filter(
+    zuerst start_uid melden und, sobald das Gewicht stabil ist, den per pick_uid(kg) erkannten.
+    device: schon gefundenes BLEDevice (spart die Suche, wichtig für die Schnellverbindung)."""
+    t0 = time.monotonic()
+    dev = device or await BleakScanner.find_device_by_filter(
         lambda d, a: d.address == address or (d.name or "").startswith("Mijia Scale S400"), timeout=find_timeout)
     if dev is None:
         log.info("Waage nicht verbindbar (schläft schon?)")
         return None
     async with BleakClient(dev, timeout=10) as client:
+        log.info("verbunden nach %.1f s", time.monotonic() - t0)
         sess = S400Session(client, token)
         await sess.login()
-        log.info("eingeloggt")
+        log.info("eingeloggt nach %.1f s", time.monotonic() - t0)
 
         async def send_users(uid: int) -> None:
             await sess.send(build_users_action(sess._tid, make_users(uid), int(time.time())))
@@ -101,7 +104,7 @@ async def weigh_session(address: str, token: bytes, make_users, pick_uid, start_
             ev = await sess.next_event(left)
             if ev is None:
                 break
-            if ev.type == "live" and ev.weight_kg:
+            if ev.type in ("live", "final") and ev.weight_kg:
                 got_weight = True
             if ev.type == "live":
                 log.info("live %.1f kg stabil=%s", ev.weight_kg or 0, ev.stable)

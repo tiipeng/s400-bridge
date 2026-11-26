@@ -287,6 +287,9 @@ def handle(cfg: dict, store: Store, ha: HA, weight: float, imp, hr, scale: dict 
         by_uid = {p["scale_uid"]: p for p in cfg["persons"]}
         person = by_uid.get(scale["uid"]) or pick_person(cfg, store, weight)
         m = from_scale(scale)
+        if "fat" not in m:  # Waage hat niemanden erkannt (Profil kam zu spät) -> Formel
+            for k, v in metrics(person, weight, imp, hr).items():
+                m.setdefault(k, v)
     else:
         person = pick_person(cfg, store, weight)
         m = metrics(person, weight, imp, hr)
@@ -343,13 +346,45 @@ class GattWorker:
         self.result_at = -1e9
         self.pending: list[tuple] = []
 
-    def poke(self, ble_id: str) -> None:
+    WAKE_SILENCE = 30  # s Funkstille davor = die Waage wacht gerade auf
+
+    def start_scanner(self) -> None:
+        """Eigener Dauer-Scan in diesem Prozess: beim ersten Signal nach einer Pause sofort mit
+        genau diesem Gerät verbinden (ohne neue Suche) – die Waage misst schon, es zählt jede Sekunde."""
+        import asyncio
+        from bleak import BleakScanner
+        scale_id = self.cfg.get("scale_ble_id")
+        state = {"last": -1e9}
+
+        def cb(device, adv):
+            if not (device.address == scale_id or (adv.local_name or device.name or "").startswith("Mijia Scale")):
+                return
+            now = time.monotonic()
+            woke = now - state["last"] >= self.WAKE_SILENCE
+            state["last"] = now
+            if woke:
+                log.info("Waage wacht auf (rssi %s)", adv.rssi)
+                self.poke(device.address, device)
+
+        async def run():
+            while True:
+                try:
+                    async with BleakScanner(cb):
+                        while True:
+                            await asyncio.sleep(3600)
+                except Exception as e:
+                    log.warning("Scanner neu gestartet: %r", e)
+                    await asyncio.sleep(5)
+
+        asyncio.run_coroutine_threadsafe(run(), self.loop)
+
+    def poke(self, ble_id: str, device=None) -> None:
         import asyncio
         with self.lock:
             if self.busy or time.monotonic() - self.ended < self.COOLDOWN:
                 return
             self.busy = True
-        asyncio.run_coroutine_threadsafe(self._session(ble_id), self.loop)
+        asyncio.run_coroutine_threadsafe(self._session(ble_id, device), self.loop)
 
     def adv_measurement(self, w, i, h) -> None:
         with self.lock:
@@ -361,7 +396,7 @@ class GattWorker:
                 return
         handle(self.cfg, self.store, self.ha, w, i, h)
 
-    async def _session(self, ble_id: str) -> None:
+    async def _session(self, ble_id: str, device=None) -> None:
         import gatt
         cfg, store = self.cfg, self.store
         res = None
@@ -371,7 +406,8 @@ class GattWorker:
                 ble_id, self.token,
                 make_users=lambda uid: gatt.users_json(cfg, uid, {p["id"]: store.last_weight(p["id"]) for p in cfg["persons"]}),
                 pick_uid=lambda kg: pick_person(cfg, store, kg)["scale_uid"],
-                start_uid=last["scale_uid"], timeout=60, find_timeout=10)
+                start_uid=last["scale_uid"], timeout=60, find_timeout=10,
+                idle_timeout=4, device=device)
         except Exception as e:
             log.warning("Verbindung zur Waage fehlgeschlagen: %r", e)
         ok = bool(res and res.get("weight"))
@@ -401,7 +437,9 @@ def main() -> None:
     ha = HA(cfg["ha_url"], keychain("ha_token"))
     token = keychain("token")
     worker = GattWorker(cfg, store, ha, bytes.fromhex(token)) if token else None
-    if not worker:
+    if worker and cfg.get("gatt_fast", False):  # aus: Waage funkt erst nach der Messung, kein Zeitfenster
+        worker.start_scanner()
+    else:
         log.warning("kein Waagen-Token im Schlüsselbund – nur Funk-Modus, Display zeigt kein Fett")
     meas = Measurement(worker.adv_measurement if worker else (lambda w, i, h: handle(cfg, store, ha, w, i, h)))
     hook_s400(meas)
@@ -435,7 +473,7 @@ def main() -> None:
             now = time.monotonic()
             # Wach und ruhig funkt die Waage alle ~11 s. Erst nach >= 30 s Stille ist ein Paket ein
             # echtes Aufwachen (jemand steigt drauf) – sonst würden wir die Waage wachhalten.
-            if worker and now - last_seen >= 30:
+            if worker and cfg.get("gatt_on_beacon", False) and now - last_seen >= 30:
                 worker.poke(json.loads(line)["id"])
             last_seen = now
             if si.service_data[FE95][0] & 0x40:

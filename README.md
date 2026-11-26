@@ -3,22 +3,26 @@
 Use the **Xiaomi Mijia Body Composition Scale S400** (`MJTZC01YM`) without the Xiaomi Home app,
 for a household of several people, with the data going to **Apple Health** (and optionally Home Assistant).
 
-A Mac near the scale does what the Xiaomi app did:
+A Mac near the scale listens to its encrypted Bluetooth broadcast (weight + impedance, decoded with
+[`xiaomi-ble`](https://github.com/Bluetooth-Devices/xiaomi-ble)), assigns each weigh-in to a person by weight,
+estimates body fat / lean mass / BMI with the well-known Mi Fit formula, and
 
-1. When the scale wakes up (someone steps on it), the Mac connects over Bluetooth and logs in
-   (Mi Home v2 auth with the device token).
-2. It sends the user profiles (age, sex, height, last weight) and, once the weight is stable,
-   tells the scale **who** is standing on it (picked by weight).
-3. The scale computes body fat, muscle, water, BMR and more itself, **shows it on its display**, and sends
-   the full result back.
-4. The result is stored in SQLite, written as a small JSON file to iCloud Drive
-   (`Waage/<Name>/neu/`), and optionally pushed to Home Assistant sensors plus a push notification.
-5. An iOS Shortcut on each person's iPhone picks up the JSON files and logs weight, body fat %,
-   lean body mass and BMI into Apple Health (with the original timestamp).
+- stores it in SQLite,
+- writes a small JSON file per weigh-in to iCloud Drive (`Waage/<Name>/neu/`),
+- optionally updates Home Assistant sensors and sends a push notification.
 
-If the Bluetooth session fails, the bridge falls back to the scale's encrypted broadcast
-(weight + impedance, decoded with [`xiaomi-ble`](https://github.com/Bluetooth-Devices/xiaomi-ble))
-and estimates body fat with the well-known Mi Fit formula.
+An iOS Shortcut on each person's iPhone picks up the JSON files and logs weight, body fat %,
+lean body mass and BMI into Apple Health (with the original timestamp).
+
+### Experimental: the scale's own evaluation (off by default)
+
+`gatt.py` can also talk to the scale like the Xiaomi app does: Mi Home v2 login with the device token,
+send the user profiles, tell the scale who is standing on it. The scale then computes body composition
+itself, **shows body fat on its display** and returns the full result (fat, muscle, water, BMR, …).
+We verified this works, **but only if the Mac is already connected when someone steps on**: from sleep,
+the S400 only starts advertising when the measurement is already finished, so there is no time to connect.
+Staying connected permanently would drain the scale's batteries, so it is disabled
+(`gatt_fast` / `gatt_on_beacon` in `config.json`, both `false`). `tools/gatt_test.py` runs one session by hand.
 
 > Code comments and log messages are in German. Tested with one S400 (firmware `2.1.1_0057`) on macOS 26.
 > The profile message was rebuilt from a Bluetooth capture of the Xiaomi app. It works for us, but it is
@@ -29,8 +33,8 @@ and estimates body fat with the well-known Mi Fit formula.
 | Part | What it does |
 |---|---|
 | `blescan/` | Tiny Swift program with an embedded `Info.plist`. macOS only grants Bluetooth to a program that declares it, so this binary owns the permission, scans for `0xFE95` adverts and starts `bridge.py` as a child (which inherits the permission). |
-| `bridge.py` | Main loop: wake detection, fallback broadcast decoding, person matching, storage, iCloud/HA export. |
-| `gatt.py` | Bluetooth session with the scale: login, user profiles, live weight, final result. |
+| `bridge.py` | Main loop: broadcast decoding, person matching, body-fat estimate, storage, iCloud/HA export. |
+| `gatt.py` | Experimental Bluetooth session with the scale: login, user profiles, live weight, scale-computed result. |
 | `s400/` | Mi Home v2 login and MIoT framing, vendored from [snelstim/ha-xiaomi-s400](https://github.com/snelstim/ha-xiaomi-s400) (Apache-2.0). |
 | `tools/decode_capture.py` | Decrypts an iPhone Bluetooth capture (`.pklg`) between the Xiaomi app and the scale, given the token. |
 
